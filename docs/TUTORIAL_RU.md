@@ -60,7 +60,7 @@ async def feed(request: Request, auth: Auth):
 
 ## Выдадим токен консольному клиенту
 
-Консольный клиент может передавать токен в заголовке `Authorization: Bearer <token>`. Создайте `app.state.auth = BearerAuth[int]()` и используйте `Depends(bearer_user(get_auth))` на защищённых маршрутах. После проверки пользователя выпустите токен через тот же менеджер, который обслуживает маршруты:
+Консольный клиент может передавать токен в заголовке `Authorization: Bearer <token>`. Создайте `app.state.auth = BearerAuth[int]()` и используйте `Depends(BearerAuth.user_dependency(get_auth))` на защищённых маршрутах. После проверки пользователя выпустите токен через тот же менеджер, который обслуживает маршруты:
 
 ```python
 issued = await auth.sessions.issue(user_id, ttl=900)

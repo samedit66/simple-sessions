@@ -2,11 +2,12 @@ import re
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable, Generator
 from contextlib import contextmanager
+from functools import cached_property
 from math import floor
-from typing import Annotated, ClassVar
+from typing import Annotated, ClassVar, Self
 
 from fastapi import Depends, HTTPException, Request, Response, status
-from fastapi.security import APIKeyCookie, HTTPAuthorizationCredentials, HTTPBearer
+from fastapi.security import APIKeyCookie, HTTPBearer
 
 from simple_sessions.models import (
     CookieSettings,
@@ -27,6 +28,9 @@ class _RequestAuth[T: UserId](ABC):
 
     def __init__(self, sessions: Sessions[T] | None = None) -> None:
         self.sessions: Sessions[T] = Sessions() if sessions is None else sessions
+
+    async def _get_self(self) -> Self:
+        return self
 
     @abstractmethod
     def _request_token(self, request: Request) -> str | None: ...
@@ -80,6 +84,26 @@ class CookieAuth[UserIdT: UserId](_RequestAuth[UserIdT]):
     ) -> None:
         super().__init__(sessions)
         self._cookie = CookieSettings() if cookie is None else cookie
+
+    @cached_property
+    def current_user(self) -> Callable[..., Awaitable[UserIdT]]:
+        """Provide the required user ID and document this manager's cookie in OpenAPI."""
+        return self.user_dependency(self._get_self, cookie_name=self._cookie.name)
+
+    @staticmethod
+    def user_dependency[U: UserId](
+        get_auth: "Callable[..., CookieAuth[U] | Awaitable[CookieAuth[U]]]",
+        *,
+        cookie_name: str = "__Host-session_id",
+    ) -> Callable[..., Awaitable[U]]:
+        """Provide the required user ID using the request's manager.
+
+        Set cookie_name to the manager's cookie name for accurate OpenAPI documentation.
+        """
+        scheme = APIKeyCookie(
+            name=cookie_name, scheme_name="SessionCookie", auto_error=False
+        )
+        return _user_dependency(get_auth, scheme)
 
     def _request_token(self, request: Request) -> str | None:
         values = _cookie_values(request, self._cookie.name)
@@ -151,6 +175,20 @@ class BearerAuth[T: UserId](_RequestAuth[T]):
 
     _challenge: ClassVar[dict[str, str] | None] = {"WWW-Authenticate": "Bearer"}
 
+    @cached_property
+    def current_user(self) -> Callable[..., Awaitable[T]]:
+        """Provide the required user ID and document bearer authentication in OpenAPI."""
+        return self.user_dependency(self._get_self)
+
+    @staticmethod
+    def user_dependency[U: UserId](
+        get_auth: "Callable[..., BearerAuth[U] | Awaitable[BearerAuth[U]]]",
+    ) -> Callable[..., Awaitable[U]]:
+        """Provide the required user ID using the request's bearer manager."""
+        return _user_dependency(
+            get_auth, HTTPBearer(scheme_name="SessionBearer", auto_error=False)
+        )
+
     def _request_token(self, request: Request) -> str | None:
         headers = request.headers.getlist("authorization")
         match = _BEARER.fullmatch(headers[0]) if len(headers) == 1 else None
@@ -164,39 +202,14 @@ class BearerAuth[T: UserId](_RequestAuth[T]):
                 await self.sessions.revoke(token)
 
 
-def cookie_user[T: UserId](
-    get_auth: Callable[..., CookieAuth[T] | Awaitable[CookieAuth[T]]],
-    *,
-    cookie_name: str = "__Host-session_id",
+def _user_dependency[T: UserId](
+    get_auth: Callable[..., _RequestAuth[T] | Awaitable[_RequestAuth[T]]],
+    scheme: APIKeyCookie | HTTPBearer,
 ) -> Callable[..., Awaitable[T]]:
-    """Build a required-user dependency that advertises the cookie in OpenAPI.
-
-    Use the same cookie name as the manager returned by get_auth.
-    """
-    scheme = APIKeyCookie(
-        name=cookie_name, scheme_name="SessionCookie", auto_error=False
-    )
-
     async def current_user(
         request: Request,
-        auth: Annotated[CookieAuth[T], Depends(get_auth)],
-        _credential: Annotated[str | None, Depends(scheme)],
-    ) -> T:
-        return await auth.require_user(request)
-
-    return current_user
-
-
-def bearer_user[T: UserId](
-    get_auth: Callable[..., BearerAuth[T] | Awaitable[BearerAuth[T]]],
-) -> Callable[..., Awaitable[T]]:
-    """Build a required-user dependency that advertises bearer authentication in OpenAPI."""
-    scheme = HTTPBearer(scheme_name="SessionBearer", auto_error=False)
-
-    async def current_user(
-        request: Request,
-        auth: Annotated[BearerAuth[T], Depends(get_auth)],
-        _credential: Annotated[HTTPAuthorizationCredentials | None, Depends(scheme)],
+        auth: Annotated[_RequestAuth[T], Depends(get_auth)],
+        _credential: Annotated[object, Depends(scheme)],
     ) -> T:
         return await auth.require_user(request)
 

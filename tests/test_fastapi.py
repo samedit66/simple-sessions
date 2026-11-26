@@ -13,8 +13,6 @@ from simple_sessions import (
     Sessions,
     SessionStoreError,
     SessionStoreUnavailable,
-    bearer_user,
-    cookie_user,
 )
 
 ORIGIN = "https://app.example"
@@ -23,15 +21,6 @@ COOKIE = "__Host-session_id"
 
 def make_app(auth: CookieAuth[int] | BearerAuth[int], user_id: int = 7) -> FastAPI:
     app = FastAPI()
-
-    app.state.auth = auth
-
-    async def get_auth(request: Request):
-        return request.app.state.auth
-
-    current_user = (
-        cookie_user(get_auth) if isinstance(auth, CookieAuth) else bearer_user(get_auth)
-    )
 
     @app.post("/issue")
     async def issue():
@@ -46,7 +35,7 @@ def make_app(auth: CookieAuth[int] | BearerAuth[int], user_id: int = 7) -> FastA
 
     @app.api_route("/me", methods=["QUERY"], include_in_schema=False)
     @app.get("/me")
-    async def me(user: Annotated[int, Depends(current_user)]):
+    async def me(user: Annotated[int, Depends(auth.current_user)]):
         return {"user": user}
 
     @app.get("/hello")
@@ -267,6 +256,12 @@ def test_openapi_documents_only_required_routes(auth, scheme, model):
 async def test_custom_cookie_name_for_static_router():
     name = "__Host-shop_session"
     auth = CookieAuth[int](cookie=CookieSettings(name=name))
+    assert (
+        make_app(auth).openapi()["components"]["securitySchemes"]["SessionCookie"][
+            "name"
+        ]
+        == name
+    )
     router = APIRouter()
 
     async def get_auth(request: Request) -> CookieAuth[int]:
@@ -274,7 +269,9 @@ async def test_custom_cookie_name_for_static_router():
 
     @router.get("/me")
     async def me(
-        user: Annotated[int, Depends(cookie_user(get_auth, cookie_name=name))],
+        user: Annotated[
+            int, Depends(CookieAuth.user_dependency(get_auth, cookie_name=name))
+        ],
     ):
         return user
 
@@ -301,7 +298,7 @@ async def test_shared_router_uses_manager_from_each_app():
     async def get_auth(request: Request) -> BearerAuth[int]:
         return request.app.state.auth
 
-    current_user = bearer_user(get_auth)
+    current_user = BearerAuth.user_dependency(get_auth)
 
     @router.get("/me")
     async def me(user_id: Annotated[int, Depends(current_user)]):

@@ -20,7 +20,10 @@ classifiers = [
     "Programming Language :: Python :: 3.15",
     "Typing :: Typed",
 ]
-dependencies = ["fastapi>=0.115.6,<1", "pydantic>=2.11,<3"]
+dependencies = [
+    "fastapi>=0.115.6,<1",
+    "pydantic>=2.11,<3",
+]
 
 [project.optional-dependencies]
 redis = ["redis>=5.2,<9"]

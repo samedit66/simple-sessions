@@ -1,4 +1,4 @@
-from simple_sessions.auth import BearerAuth, CookieAuth, bearer_user, cookie_user
+from simple_sessions.auth import BearerAuth, CookieAuth
 from simple_sessions.models import CookieSettings, IssuedSession, Session
 from simple_sessions.sessions import Sessions
 from simple_sessions.store import (
@@ -19,6 +19,4 @@ __all__ = [
     "SessionStoreError",
     "SessionStoreUnavailable",
     "Sessions",
-    "bearer_user",
-    "cookie_user",
 ]

@@ -1,124 +1,221 @@
-# Simple Sessions
+<div align="center">
 
-[English tutorial](docs/TUTORIAL_EN.md) · [Туториал на русском](docs/TUTORIAL_RU.md)
+# simple-sessions
 
-Give your FastAPI app sessions you can revoke. Issue a token after sign-in, read the user ID in a route, and revoke the token on sign-out.
+[![CI](https://github.com/samedit66/simple-sessions/actions/workflows/ci-and-publish.yml/badge.svg)](https://github.com/samedit66/simple-sessions/actions/workflows/ci-and-publish.yml)
+[![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-blue?logo=python)](https://www.python.org/downloads/)
+[![Apache 2.0 license](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 
-## Try cookie sessions
+Issue a token after sign-in, read the user ID in a route, and revoke the token on sign-out.
 
-Save these three files in one directory. The demo signs in one user (ID 1) with credentials read at startup. Sessions use the default secure cookie and a one-hour lifetime.
+</div>
 
-**`app.py`**
+## What you get
 
-```python
-import os
+Add session-based authentication to your FastAPI app with a few lines of code. Your app checks who’s signing in. Once you have their user ID, `simple-sessions` takes care of issuing, looking up, and revoking their session.
 
-from fastapi import FastAPI
+- **`CookieAuth`** sets a cookie that the browser sends with later requests.
+- **`BearerAuth`** reads a token that an API client sends in the `Authorization` header.
 
-from simple_sessions import CookieAuth
-from users import router
+Both keep the session on the server. The client gets a random token, and the store keeps its SHA-256 digest. Pick the type your app already uses for user IDs: `int`, `str`, or `UUID`.
 
+## Cheat sheet
 
-def create_app() -> FastAPI:
-    app = FastAPI()
-    app.state.auth = CookieAuth[int]()
-    app.state.username = os.environ["DEMO_USERNAME"]
-    app.state.password = os.environ["DEMO_PASSWORD"]
-    app.include_router(router)
-    return app
+Add the package to your Python 3.12+ project:
+
+```sh
+uv add simple-sessions
 ```
 
-**`dependencies.py`**
+With pip, run `python -m pip install simple-sessions` in your virtual environment.
+
+### Cookie-based authentication
+
+Create one manager for your app. Here our user IDs are integers:
+
+```python
+from typing import Annotated
+
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from pydantic import BaseModel
+
+from simple_sessions import CookieAuth
+
+app = FastAPI()
+auth = CookieAuth[int]()
+
+
+class UserLogin(BaseModel):
+    login: str
+    password: str
+```
+
+In the login route, use your app’s credential check. Here, `verify_credentials` stands for a function that returns the verified account’s ID, or `None` if the credentials are wrong:
+
+```python
+@app.post("/login", status_code=204)
+async def login(credentials: UserLogin, request: Request, response: Response):
+    user_id = await verify_credentials(credentials)
+    if user_id is None:
+        raise HTTPException(status_code=401)
+    await auth.login(request, response, user_id=user_id)
+```
+
+`login` sets a Secure, HttpOnly cookie and replaces the session from the previous cookie, if present. To protect a route, ask for `auth.current_user`. FastAPI documents the cookie in OpenAPI, and the handler gets the user ID. A missing or expired session returns HTTP 401.
+
+```python
+@app.get("/protected")
+async def protected(user_id: Annotated[int, Depends(auth.current_user)]):
+    return {"user_id": user_id}
+
+
+@app.post("/logout", status_code=204)
+async def logout(request: Request, response: Response):
+    await auth.logout(request, response)
+```
+
+Want to try the whole flow? The [runnable example](examples/readme/app.py) includes a single-account credential check. From the repository root, start the example with uv:
+
+```sh
+ADMIN_LOGIN=alice ADMIN_PASSWORD=local-demo uv run uvicorn examples.readme.app:app
+```
+
+With pip, install the checkout and Uvicorn using `python -m pip install -e . uvicorn`, then run the same command without `uv run`.
+
+In another terminal, send the same `Origin` that a browser would send on login and logout. Save the cookie from the first response and try it again after signing out:
+
+```sh
+url=http://localhost:8000
+curl -i -c cookies.txt -H "Origin: $url" -H 'Content-Type: application/json' \
+  -d '{"login":"alice","password":"local-demo"}' "$url/login"       # 204
+curl -i -b cookies.txt "$url/protected"                            # 200
+curl -i -b cookies.txt -H "Origin: $url" -X POST "$url/logout"     # 204
+curl -i -b cookies.txt "$url/protected"                            # 401
+```
+
+### Using a shared router
+
+If you keep your routes in a shared router, set `app.state.auth = auth` when you create each app. Then put the following dependency in your `dependencies.py` module. Each request uses its own app’s manager:
 
 ```python
 from typing import Annotated
 
 from fastapi import Depends, Request
 
-from simple_sessions import CookieAuth, cookie_user
+from simple_sessions import CookieAuth
 
 
-async def get_auth(request: Request) -> CookieAuth[int]:
+def get_auth(request: Request) -> CookieAuth[int]:
     return request.app.state.auth
 
 
-type Auth = Annotated[CookieAuth[int], Depends(get_auth)]
-
-
-type CurrentUserId = Annotated[int, Depends(cookie_user(get_auth))]
+type CurrentUser = Annotated[int, Depends(CookieAuth.user_dependency(get_auth))]
 ```
 
-**`users.py`**
+Import `CurrentUser` in your routes and use it as the parameter type: `async def protected(user_id: CurrentUser)`. If you use a custom cookie name, pass the same `cookie_name` to `user_dependency` so OpenAPI shows the right name.
+
+### Bearer-based authentication
+
+For a CLI or API client, create a `BearerAuth` manager. After the same credential check as above, issue a token and return it to the client:
 
 ```python
-from secrets import compare_digest
-from typing import Annotated
+from simple_sessions import BearerAuth
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
-
-from dependencies import Auth, CurrentUserId
-
-router = APIRouter()
+bearer = BearerAuth[int]()
 
 
-@router.post("/login", status_code=204)
-async def login(
-    request: Request,
-    response: Response,
-    credentials: Annotated[HTTPBasicCredentials, Depends(HTTPBasic())],
-    auth: Auth,
-) -> None:
-    state = request.app.state
-    username_ok = compare_digest(credentials.username.encode(), state.username.encode())
-    password_ok = compare_digest(credentials.password.encode(), state.password.encode())
-    if not (username_ok and password_ok):
-        raise HTTPException(401, headers={"WWW-Authenticate": "Basic"})
-    await auth.login(request, response, user_id=1)
+@app.post("/token")
+async def token(credentials: UserLogin, response: Response):
+    user_id = await verify_credentials(credentials)
+    if user_id is None:
+        raise HTTPException(status_code=401)
+    issued = await bearer.sessions.issue(user_id)
+    response.headers["Cache-Control"] = "no-store"
+    return {"access_token": issued.token, "token_type": "bearer"}
 
 
-@router.get("/me")
-async def me(user_id: CurrentUserId) -> dict[str, int]:
+@app.get("/me")
+async def me(user_id: Annotated[int, Depends(bearer.current_user)]):
     return {"user_id": user_id}
-
-
-@router.post("/logout", status_code=204)
-async def logout(request: Request, response: Response, auth: Auth) -> None:
-    await auth.logout(request, response)
 ```
 
-With Python 3.12+, install the dependencies and start the app:
+Send `Authorization: Bearer <access_token>` on each protected request. To sign out, send the same header to a route that calls `await bearer.logout(request)`.
+
+## Other features
+
+### Let guests in
+
+A feed can welcome guests and still show signed-in users their own content. Use the cookie manager from the quickstart:
+
+```python
+@app.get("/feed")
+async def feed(request: Request):
+    user_id = await auth.resolve_user(request)
+    if user_id is None:
+        return {"feed": "public"}
+    return {"feed": "personal", "user_id": user_id}
+```
+
+### Set a lifetime and check when a session expires
+
+Sessions last one hour by default. For a 15-minute session, pass the lifetime in seconds when you issue it. In the cookie login route, after checking the credentials:
+
+```python
+await auth.login(request, response, user_id=user_id, ttl=900)
+```
+
+For the bearer token route, use `issued = await bearer.sessions.issue(user_id, ttl=900)`. To show a signed-in user how long their session lasts, read the session itself:
+
+```python
+@app.get("/session")
+async def session_details(request: Request):
+    session = await auth.require_session(request)
+    return {"created_at": session.created_at, "expires_at": session.expires_at}
+```
+
+### Share sessions across workers
+
+The default store lives in one process and starts empty after a restart. To share sessions across workers, point them at the same Redis 7+ primary and use the same namespace. Add Redis support to your project:
 
 ```sh
-python -m pip install simple-sessions uvicorn
-export DEMO_USERNAME=alice DEMO_PASSWORD=local-demo
-uvicorn app:create_app --factory
+uv add 'simple-sessions[redis]'
 ```
 
-In another terminal, enter the configured password when curl prompts. Curl supports Secure cookies on `http://localhost`. The last request reuses the saved cookie after revocation.
+With pip, run `python -m pip install 'simple-sessions[redis]'`.
 
-```sh
-url=http://localhost:8000
-curl -i -c cookies.txt -u alice -H "Origin: $url" -X POST "$url/login"  # 204
-curl -i -b cookies.txt "$url/me"                                       # 200
-curl -i -b cookies.txt -H "Origin: $url" -X POST "$url/logout"         # 204
-curl -i -b cookies.txt "$url/me"                                       # 401
+Set `REDIS_URL` to your Redis connection URL. This example creates one client per worker and closes it at shutdown. The shared router above can pick up the manager through `get_auth`:
+
+```python
+import os
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+from redis.asyncio import Redis
+from redis.asyncio.retry import Retry
+from redis.backoff import NoBackoff
+
+from simple_sessions import CookieAuth, Sessions
+from simple_sessions.redis import RedisSessionStore
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    async with Redis.from_url(
+        os.environ["REDIS_URL"],
+        socket_connect_timeout=2,
+        socket_timeout=2,
+        retry=Retry(NoBackoff(), 0),
+    ) as client:
+        store = RedisSessionStore(
+            client, namespace="my-app:prod", encode_user_id=str, decode_user_id=int
+        )
+        app.state.auth = CookieAuth(Sessions(store))
+        yield
+
+
+app = FastAPI(lifespan=lifespan)
 ```
 
-FastAPI documents `/me` as cookie-protected through `cookie_user(get_auth)`.
-For a custom name, pass the same configuration value to `CookieSettings(name=...)`
-and `cookie_user(get_auth, cookie_name=...)`. For a Bearer API, store
-`BearerAuth[int]()` in the app and declare protected routes with `bearer_user(get_auth)`.
+Have your own store? Implement `create`, `get`, and `revoke` as described in [SessionStore](src/simple_sessions/store.py).
 
-For an application with an accounts database, replace the demo credential check with your password verifier and pass the verified account ID to `auth.login`. For multiple workers, configure a shared store as shown in the [tutorial](docs/TUTORIAL_EN.md).
-
-## Run the tests
-
-```sh
-uv sync --locked --all-extras
-uv run --no-sync pytest
-uv run --no-sync ruff check .
-uv run --no-sync mypy
-```
-
-Set `REDIS_TEST_URL` to include real Redis integration tests. The tests use isolated key namespaces. See [Releasing](RELEASING.md) for package checks and publication.
+For more on cookie origins, expiry, and Redis setup, read the [English tutorial](docs/TUTORIAL_EN.md) or the [Russian tutorial](docs/TUTORIAL_RU.md).

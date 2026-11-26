@@ -60,7 +60,7 @@ Use `require_session` or `resolve_session` when you also need `created_at` or `e
 
 ## Give a CLI a token
 
-A CLI can send `Authorization: Bearer <token>` on each request. Set `app.state.auth = BearerAuth[int]()` and use `Depends(bearer_user(get_auth))` on protected routes. After verifying the caller, issue the token from the same manager that serves the routes:
+A CLI can send `Authorization: Bearer <token>` on each request. Set `app.state.auth = BearerAuth[int]()` and use `Depends(BearerAuth.user_dependency(get_auth))` on protected routes. After verifying the caller, issue the token from the same manager that serves the routes:
 
 ```python
 issued = await auth.sessions.issue(user_id, ttl=900)
