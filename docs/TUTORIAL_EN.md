@@ -76,7 +76,8 @@ class SQLiteSessionStore:
                 yield db
         except sqlite3.Error as exc:
             if getattr(exc, "sqlite_errorcode", 0) & 255 in (
-                sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED,
+                sqlite3.SQLITE_BUSY,
+                sqlite3.SQLITE_LOCKED,
             ):
                 raise SessionStoreUnavailable("Session database is busy") from exc
             raise SessionStoreError("Session database operation failed") from exc
@@ -91,8 +92,9 @@ class SQLiteSessionStore:
                 created_at TEXT NOT NULL, expires_at TEXT NOT NULL
             )""")
 
-    async def create(self, digest: str, session: Session[int], *,
-                     replace_digest: str | None = None) -> bool:
+    async def create(
+        self, digest: str, session: Session[int], *, replace_digest: str | None = None
+    ) -> bool:
         if digest == replace_digest:
             raise ValueError("New and predecessor digests must differ")
         return await asyncio.to_thread(self._create, digest, session, replace_digest)
@@ -104,14 +106,17 @@ class SQLiteSessionStore:
             expires = stamp(session.expires_at)
             if expires <= now:
                 raise SessionStoreError("Session expired before insertion")
-            result = db.execute("""
+            result = db.execute(
+                """
                 INSERT INTO sessions (digest, user_id, created_at, expires_at)
                 VALUES (?, ?, ?, ?)
                 ON CONFLICT(digest) DO UPDATE SET
                     user_id = excluded.user_id, created_at = excluded.created_at,
                     expires_at = excluded.expires_at
                 WHERE sessions.expires_at <= ?
-            """, (digest, str(session.user_id), stamp(session.created_at), expires, now))
+            """,
+                (digest, str(session.user_id), stamp(session.created_at), expires, now),
+            )
             if result.rowcount == 0:
                 return False
             if predecessor is not None:
@@ -133,8 +138,11 @@ class SQLiteSessionStore:
             expires = datetime.fromisoformat(row[2])
             if expires <= datetime.now(UTC):
                 return None
-            return Session[int](user_id=int(row[0]), created_at=datetime.fromisoformat(row[1]),
-                                expires_at=expires)
+            return Session[int](
+                user_id=int(row[0]),
+                created_at=datetime.fromisoformat(row[1]),
+                expires_at=expires,
+            )
         except (ValueError, TypeError) as exc:
             raise SessionStoreError("Invalid stored session") from exc
 
@@ -255,8 +263,12 @@ class Credentials(BaseModel):
 
 
 def verified_id(credentials: Credentials) -> int:
-    login_ok = compare_digest(credentials.login.encode(), os.environ["ADMIN_LOGIN"].encode())
-    password_ok = compare_digest(credentials.password.encode(), os.environ["ADMIN_PASSWORD"].encode())
+    login_ok = compare_digest(
+        credentials.login.encode(), os.environ["ADMIN_LOGIN"].encode()
+    )
+    password_ok = compare_digest(
+        credentials.password.encode(), os.environ["ADMIN_PASSWORD"].encode()
+    )
     if not (login_ok and password_ok):
         raise HTTPException(401)
     return 1

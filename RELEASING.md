@@ -15,3 +15,7 @@ uv run --no-sync twine check --strict dist/*
 For the first release, configure a [pending publisher](https://docs.pypi.org/trusted-publishers/creating-a-project-through-oidc/) on PyPI with project name `simple-sessions`, the owner and name of the GitHub repository, workflow `ci-and-publish.yml`, and environment `pypi`. Create the matching GitHub environment. PyPI confirms the name when it accepts the first upload.
 
 Update `project.version` in `pyproject.toml`, regenerate `uv.lock`, and tag the tested commit `v<version>`. A tag pushed to GitHub runs the tests and publishes the checked distributions through Trusted Publishing. For a manual upload, use `uv publish` with credentials for the project after running the same checks.
+
+## Local commit checks
+
+Run `uv run --locked --all-extras pre-commit install` once per clone. The hook runs Ruff on staged files (including Python snippets in Markdown), then checks types and runs the tests. If Ruff edits a file, review and stage the formatting before committing again. To check the entire repository, run `uv run pre-commit run --all-files`. Set `REDIS_TEST_URL` to a disposable Redis instance to include Redis integration tests.

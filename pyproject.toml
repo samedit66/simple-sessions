@@ -39,6 +39,7 @@ source-include = ["docs/*.md", "RELEASING.md", "tests/**", "uv.lock"]
 dev = [
     "httpx>=0.28,<1",
     "mypy>=1.18.2,<2",
+    "pre-commit>=4.7.0",
     "pytest>=8.4,<10",
     "pytest-asyncio>=1,<2",
     "ruff>=0.15.13,<1",
